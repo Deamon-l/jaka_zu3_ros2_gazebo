@@ -104,11 +104,16 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          camera_color_optical_frame:
+          camera_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
-          camera_link:
+            Value: true
+          camera_optical_frame:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          camera_test_cube_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -198,11 +203,16 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          camera_color_optical_frame:
+          camera_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
-          camera_link:
+            Value: true
+          camera_optical_frame:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          camera_test_cube_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -235,13 +245,15 @@ Visualization Manager:
           Value: true
         Link_6:
           Value: true
-        camera_color_optical_frame:
-          Value: true
         camera_link:
+          Value: true
+        camera_optical_frame:
+          Value: true
+        camera_test_cube_link:
           Value: true
         world:
           Value: true
-      Marker Scale: 0.20000000298023224
+      Marker Scale: 0.10000000149011612
       Name: TF
       Show Arrows: true
       Show Axes: true
@@ -256,8 +268,10 @@ Visualization Manager:
                     Link_5:
                       Link_6:
                         camera_link:
-                          camera_color_optical_frame:
+                          camera_optical_frame:
                             {}
+                        camera_test_cube_link:
+                          {}
       Update Interval: 0
       Value: true
   Enabled: true
@@ -278,7 +292,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.0105211734771729
+      Distance: 1.3592569828033447
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1

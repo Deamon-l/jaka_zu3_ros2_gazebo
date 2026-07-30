@@ -29,6 +29,25 @@
       <child link="camera_link"/>
       <origin xyz="0 0 0.015" rpy="-1.57079632679 -1.57079632679 0"/>
     </joint>
+    <link name="camera_test_cube_link">
+      <inertial>
+        <mass value="0.001"/>
+        <inertia ixx="0.000000417" ixy="0" ixz="0" iyy="0.000000417" iyz="0" izz="0.000000417"/>
+      </inertial>
+      <visual>
+        <geometry>
+          <box size="0.05 0.05 0.05"/>
+        </geometry>
+        <material name="test_cube_red">
+          <color rgba="1 0 0 1"/>
+        </material>
+      </visual>
+    </link>
+    <joint name="camera_test_cube_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="camera_test_cube_link"/>
+      <origin xyz="0 0 0.30" rpy="0 0 0"/>
+    </joint>
     <link name="camera_optical_frame"/>
     <joint name="camera_optical_joint" type="fixed">
       <parent link="camera_link"/>
