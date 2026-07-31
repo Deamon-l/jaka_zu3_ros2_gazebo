@@ -43,6 +43,7 @@
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>ros_gz_image</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>jaka_zu3_vision</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>rviz_common</exec_depend>
   <exec_depend>rviz_default_plugins</exec_depend>

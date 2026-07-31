@@ -29,37 +29,19 @@
       <child link="camera_link"/>
       <origin xyz="0 0 0.015" rpy="-1.57079632679 -1.57079632679 0"/>
     </joint>
-    <link name="camera_test_cube_link">
-      <inertial>
-        <mass value="0.001"/>
-        <inertia ixx="0.000000417" ixy="0" ixz="0" iyy="0.000000417" iyz="0" izz="0.000000417"/>
-      </inertial>
-      <visual>
-        <geometry>
-          <box size="0.05 0.05 0.05"/>
-        </geometry>
-        <material name="test_cube_red">
-          <color rgba="1 0 0 1"/>
-        </material>
-      </visual>
-    </link>
-    <joint name="camera_test_cube_joint" type="fixed">
-      <parent link="${parent}"/>
-      <child link="camera_test_cube_link"/>
-      <origin xyz="0 0 0.30" rpy="0 0 0"/>
-    </joint>
+    
     <link name="camera_optical_frame"/>
     <joint name="camera_optical_joint" type="fixed">
       <parent link="camera_link"/>
       <child link="camera_optical_frame"/>
-      <origin xyz="0.04 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
+      <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
     </joint>
 
     <xacro:if value="${use_gazebo and enable_camera_sensor}">
       <gazebo reference="camera_link">
         <!-- Keep both aligned image streams inexpensive enough for ros2_control. -->
         <sensor name="wrist_depth_camera" type="depth_camera">
-          <pose>0.014 0 0 0 0 0</pose>
+          <pose>0.02 0 0 0 0 0</pose>
           <always_on>true</always_on>
           <update_rate>5</update_rate>
           <visualize>false</visualize>

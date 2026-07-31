@@ -79,6 +79,24 @@ def generate_launch_description():
         output="screen",
     )
 
+    camera_info_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        condition=IfCondition(enable_camera),
+        arguments=[
+            "/wrist_camera/rgb_image/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
+        ],
+        output="screen",
+    )
+
+    target_detector = Node(
+        package="jaka_zu3_vision",
+        executable="target_detector",
+        condition=IfCondition(enable_camera),
+        parameters=[{"use_sim_time": True}],
+        output="screen",
+    )
+
     # 5. 发布机器人状态 (开启仿真时间)
     rsp = Node(
         package="robot_state_publisher",
@@ -147,6 +165,8 @@ def generate_launch_description():
             ign_gazebo,
             clock_bridge,
             camera_bridge,
+            camera_info_bridge,
+            target_detector,
             rsp,
             spawn_entity,
             # Start controller loading immediately after the model is created.
