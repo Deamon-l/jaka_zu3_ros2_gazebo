@@ -3,18 +3,22 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     RegisterEventHandler,
+    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
 def generate_launch_description():
     enable_camera = LaunchConfiguration("enable_camera")
+    run_grasp = LaunchConfiguration("run_grasp")
+    execute_grasp = LaunchConfiguration("execute_grasp")
 
     # 1. 载入 MoveIt 配置，开启 Gazebo 硬件模式
     moveit_config = (
@@ -84,7 +88,7 @@ def generate_launch_description():
         executable="parameter_bridge",
         condition=IfCondition(enable_camera),
         arguments=[
-            "/wrist_camera/rgb_image/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
+            "/wrist_camera/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo",
         ],
         output="screen",
     )
@@ -95,6 +99,23 @@ def generate_launch_description():
         condition=IfCondition(enable_camera),
         parameters=[{"use_sim_time": True}],
         output="screen",
+    )
+
+    target_motion_node = Node(
+        package="jaka_zu3_vision",
+        executable="target_motion",
+        condition=IfCondition(run_grasp),
+        parameters=[{
+            "use_sim_time": True,
+            "execute_motion": ParameterValue(execute_grasp, value_type=bool),
+        }],
+        output="screen",
+    )
+    # MoveIt and ros2_control need to finish initialization before the first
+    # action goal is sent.  Starting immediately can race controller loading.
+    target_motion = TimerAction(
+        period=8.0,
+        actions=[target_motion_node],
     )
 
     # 5. 发布机器人状态 (开启仿真时间)
@@ -113,6 +134,7 @@ def generate_launch_description():
         arguments=[
             "joint_state_broadcaster",
             "jaka_zu3_controller",
+            "gripper_controller",
             "--activate-as-group",
             "--controller-manager",
             "/controller_manager",
@@ -162,21 +184,28 @@ def generate_launch_description():
         [
             # false keeps the camera body and TF, but disables its renderer and bridge.
             DeclareLaunchArgument("enable_camera", default_value="true"),
+            DeclareLaunchArgument("run_grasp", default_value="false"),
+            DeclareLaunchArgument("execute_grasp", default_value="false"),
             ign_gazebo,
             clock_bridge,
             camera_bridge,
             camera_info_bridge,
-            target_detector,
             rsp,
             spawn_entity,
-            # Start controller loading immediately after the model is created.
+            # Do not let TF consumers observe the Gazebo startup clock reset.
+            # Spawn the robot first, then activate controllers, and only then
+            # start MoveIt/RViz/vision nodes.
             RegisterEventHandler(
                 event_handler=OnProcessExit(
                     target_action=spawn_entity,
-                    on_exit=[controllers_spawner],
+                    on_exit=[controllers_spawner, target_detector],
                 )
             ),
-            move_group,
-            rviz,
+            RegisterEventHandler(
+                event_handler=OnProcessExit(
+                    target_action=controllers_spawner,
+                    on_exit=[move_group, rviz, target_motion],
+                )
+            ),
         ]
     )

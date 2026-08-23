@@ -8,6 +8,8 @@ controller_manager:
 
     jaka_zu3_controller:
       type: joint_trajectory_controller/JointTrajectoryController
+    gripper_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
 
 jaka_zu3_controller:
   ros__parameters:
@@ -32,3 +34,9 @@ jaka_zu3_controller:
 joint_state_broadcaster:
   ros__parameters:
     use_local_topics: false
+
+gripper_controller:
+  ros__parameters:
+    joints: [left_finger_joint, right_finger_joint]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]

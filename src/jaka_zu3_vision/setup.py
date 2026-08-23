@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'target_detector = jaka_zu3_vision.target_detector:main',
+            'target_motion = jaka_zu3_vision.target_motion:main',
         ],
     },
 )

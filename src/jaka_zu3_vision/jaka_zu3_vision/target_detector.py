@@ -5,10 +5,10 @@ import math
 import cv2
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PointStamped
-# Registers PointStamped support with tf2_ros.Buffer.transform.
-import tf2_geometry_msgs  # noqa: F401
+from tf2_geometry_msgs import do_transform_point
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker
@@ -20,9 +20,10 @@ class TargetDetector(Node):
         self.declare_parameter('rgb_topic', '/wrist_camera/rgb_image')
         self.declare_parameter('depth_topic', '/wrist_camera/depth_image')
         self.declare_parameter(
-            'camera_info_topic', '/wrist_camera/rgb_image/camera_info')
+            'camera_info_topic', '/wrist_camera/camera_info')
         self.declare_parameter('target_frame', 'world')
         self.declare_parameter('camera_frame', 'camera_optical_frame')
+        self.declare_parameter('use_latest_tf', True)
         self.declare_parameter('marker_topic', '/detected_target_marker')
         self.declare_parameter('min_area', 40.0)
         self.declare_parameter('image_width', 128)
@@ -105,10 +106,22 @@ class TargetDetector(Node):
 
         target_frame = self.get_parameter('target_frame').value
         try:
-            world_point = self.tf_buffer.transform(
-                point, target_frame, timeout=Duration(seconds=0.1))
+            # Gazebo publishes camera images just ahead of joint-state TF by
+            # one simulation tick.  Use the newest camera pose in that case;
+            # a static scene makes the resulting millimetre-scale difference
+            # immaterial and prevents a persistent future-extrapolation error.
+            transform_time = (
+                Time() if self.get_parameter('use_latest_tf').value
+                else Time.from_msg(point.header.stamp))
+            transform = self.tf_buffer.lookup_transform(
+                target_frame,
+                point.header.frame_id,
+                transform_time,
+                timeout=Duration(seconds=0.1))
+            world_point = do_transform_point(point, transform)
         except TransformException as exc:
-            self.get_logger().warning(f'TF to {target_frame} unavailable: {exc}')
+            self.get_logger().warning(
+                f'TF to {target_frame} unavailable: {exc}')
             return
         self.point_pub.publish(world_point)
         self.publish_marker(world_point)
@@ -126,7 +139,8 @@ class TargetDetector(Node):
         height = float(self.get_parameter('image_height').value)
         fov = float(self.get_parameter('horizontal_fov').value)
         focal = width / (2.0 * math.tan(fov / 2.0))
-        self.log_status('CameraInfo unavailable; using SDF intrinsics fallback')
+        self.log_status(
+            'CameraInfo unavailable; using SDF intrinsics fallback')
         return focal, focal, width / 2.0, height / 2.0
 
     def log_status(self, message):

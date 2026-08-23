@@ -18,6 +18,7 @@
         parent="Link_6"
         use_gazebo="$(arg use_gazebo)"
         enable_camera_sensor="$(arg enable_camera_sensor)" />
+    <xacro:jaka_zu3_parallel_gripper parent="Link_6" />
 
     <!-- 加载 ros2_control 配置 -->
     <xacro:jaka_zu3_ros2_control name="jaka_zu3_hardware" initial_positions_file="$(arg initial_positions_file)" use_gazebo="$(arg use_gazebo)" use_rviz_sim="$(arg use_rviz_sim)" />
