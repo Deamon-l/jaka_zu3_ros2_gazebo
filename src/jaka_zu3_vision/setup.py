@@ -10,13 +10,14 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', ['config/vision_grasp.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='hys',
     maintainer_email='a1502759908@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='RGB-D target detection and guarded pick execution for JAKA ZU3',
+    license='BSD-3-Clause',
     extras_require={
         'test': [
             'pytest',

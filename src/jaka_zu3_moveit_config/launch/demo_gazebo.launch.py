@@ -8,7 +8,11 @@ from launch.actions import (
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (
+    LaunchConfiguration,
+    PathJoinSubstitution,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -19,6 +23,9 @@ def generate_launch_description():
     enable_camera = LaunchConfiguration("enable_camera")
     run_grasp = LaunchConfiguration("run_grasp")
     execute_grasp = LaunchConfiguration("execute_grasp")
+    vision_params_file = LaunchConfiguration("vision_params_file")
+    headless = LaunchConfiguration("headless")
+    use_rviz = LaunchConfiguration("use_rviz")
 
     # 1. 载入 MoveIt 配置，开启 Gazebo 硬件模式
     moveit_config = (
@@ -29,6 +36,7 @@ def generate_launch_description():
                 "use_gazebo": "true",
                 "use_rviz_sim": "false",
                 "enable_camera_sensor": enable_camera,
+                "enable_grasp_attachment": run_grasp,
             },
         )
         .to_moveit_configs()
@@ -43,7 +51,10 @@ def generate_launch_description():
         ),
         launch_arguments={
             "gz_args": [
-                "-r ",
+                PythonExpression(
+                    ["'-s' if '", headless, "' == 'true' else ''"]
+                ),
+                " -r ",
                 PathJoinSubstitution(
                     [
                         FindPackageShare("jaka_zu3_moveit_config"),
@@ -93,11 +104,23 @@ def generate_launch_description():
         output="screen",
     )
 
+    grasp_attachment_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        condition=IfCondition(run_grasp),
+        arguments=[
+            "/gripper/attach@std_msgs/msg/Empty]ignition.msgs.Empty",
+            "/gripper/detach@std_msgs/msg/Empty]ignition.msgs.Empty",
+            "/gripper/attached@std_msgs/msg/String[ignition.msgs.StringMsg",
+        ],
+        output="screen",
+    )
+
     target_detector = Node(
         package="jaka_zu3_vision",
         executable="target_detector",
         condition=IfCondition(enable_camera),
-        parameters=[{"use_sim_time": True}],
+        parameters=[vision_params_file, {"use_sim_time": True}],
         output="screen",
     )
 
@@ -105,10 +128,16 @@ def generate_launch_description():
         package="jaka_zu3_vision",
         executable="target_motion",
         condition=IfCondition(run_grasp),
-        parameters=[{
-            "use_sim_time": True,
-            "execute_motion": ParameterValue(execute_grasp, value_type=bool),
-        }],
+        parameters=[
+            vision_params_file,
+            {
+                "use_sim_time": True,
+                "execute_motion": ParameterValue(
+                    execute_grasp, value_type=bool
+                ),
+                "use_sim_attachment": True,
+            },
+        ],
         output="screen",
     )
     # MoveIt and ros2_control need to finish initialization before the first
@@ -160,6 +189,7 @@ def generate_launch_description():
     rviz = Node(
         package="rviz2",
         executable="rviz2",
+        condition=IfCondition(use_rviz),
         output="screen",
         parameters=[
             moveit_config.robot_description,
@@ -183,13 +213,46 @@ def generate_launch_description():
     return LaunchDescription(
         [
             # false keeps the camera body and TF, but disables its renderer and bridge.
-            DeclareLaunchArgument("enable_camera", default_value="true"),
-            DeclareLaunchArgument("run_grasp", default_value="false"),
-            DeclareLaunchArgument("execute_grasp", default_value="false"),
+            DeclareLaunchArgument(
+                "enable_camera",
+                default_value="true",
+                description="Enable the RGB-D sensors and detector.",
+            ),
+            DeclareLaunchArgument(
+                "run_grasp",
+                default_value="false",
+                description="Start the guarded target-motion node.",
+            ),
+            DeclareLaunchArgument(
+                "execute_grasp",
+                default_value="false",
+                description="Execute trajectories instead of plan-only mode.",
+            ),
+            DeclareLaunchArgument(
+                "headless",
+                default_value="false",
+                description="Run only the Gazebo server.",
+            ),
+            DeclareLaunchArgument(
+                "use_rviz",
+                default_value="true",
+                description="Start RViz with the MoveIt configuration.",
+            ),
+            DeclareLaunchArgument(
+                "vision_params_file",
+                default_value=PathJoinSubstitution(
+                    [
+                        FindPackageShare("jaka_zu3_vision"),
+                        "config",
+                        "vision_grasp.yaml",
+                    ]
+                ),
+            ),
             ign_gazebo,
             clock_bridge,
             camera_bridge,
             camera_info_bridge,
+            grasp_attachment_bridge,
             rsp,
             spawn_entity,
             # Do not let TF consumers observe the Gazebo startup clock reset.

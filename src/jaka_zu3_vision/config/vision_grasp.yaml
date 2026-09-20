@@ -1,0 +1,63 @@
+target_detector:
+  ros__parameters:
+    rgb_topic: /wrist_camera/rgb_image
+    depth_topic: /wrist_camera/depth_image
+    camera_info_topic: /wrist_camera/camera_info
+    point_topic: /detected_target_point
+    marker_topic: /detected_target_marker
+    target_frame: world
+    camera_frame: camera_optical_frame
+    use_latest_tf: true
+    max_rgb_depth_delta: 0.25
+    min_area: 40.0
+    max_area: 6000.0
+    min_saturation: 90
+    min_value: 60
+    min_depth: 0.10
+    max_depth: 2.0
+    min_depth_samples: 8
+    image_width: 128
+    image_height: 96
+    horizontal_fov: 1.047
+
+target_motion:
+  ros__parameters:
+    group_name: jaka_zu3
+    end_effector_link: gripper_base_link
+    target_frame: world
+    target_topic: /detected_target_point
+    approach_offset_z: 0.14
+    grasp_offset_z: 0.0
+    lift_offset_z: 0.16
+    # These joints move inward as the value increases.
+    open_width: 0.0
+    # 10 mm travel on each side closes the 70 mm opening onto a 50 mm cube.
+    closed_width: 0.010
+    gripper_min_position: 0.0
+    gripper_max_position: 0.025
+    gripper_motion_time: 2.0
+    grasp_settle_time: 0.5
+    finger_sync_tolerance: 0.003
+    finger_goal_tolerance: 0.005
+    use_sim_attachment: false
+    attachment_timeout: 1.0
+    attach_topic: /gripper/attach
+    detach_topic: /gripper/detach
+    attachment_state_topic: /gripper/attached
+    action_timeout: 90.0
+    max_target_age: 0.75
+    required_stable_detections: 5
+    target_stability_tolerance: 0.015
+    position_tolerance: 0.01
+    orientation_tolerance: 0.10
+    planning_pipeline: pilz_industrial_motion_planner
+    point_to_point_planner: PTP
+    linear_planner: LIN
+    velocity_scaling: 0.15
+    acceleration_scaling: 0.08
+    workspace_min_x: -0.75
+    workspace_max_x: 0.75
+    workspace_min_y: -0.75
+    workspace_max_y: 0.75
+    workspace_min_z: 0.0
+    workspace_max_z: 0.75

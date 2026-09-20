@@ -82,7 +82,7 @@
     </xacro:if>
   </xacro:macro>
 
-  <xacro:macro name="jaka_zu3_parallel_gripper" params="parent">
+  <xacro:macro name="jaka_zu3_parallel_gripper" params="parent use_gazebo:=false">
     <material name="gripper_black">
       <color rgba="0.08 0.08 0.08 1"/>
     </material>
@@ -118,20 +118,27 @@
       </inertial>
       <visual>
         <geometry>
-          <box size="0.03 0.01 0.04"/>
+          <box size="0.06 0.01 0.04"/>
         </geometry>
         <material name="finger_red"/>
       </visual>
-      <collision>
-        <geometry>
-          <box size="0.03 0.01 0.04"/>
-        </geometry>
-      </collision>
+      <!-- In Gazebo the object is attached only after a verified close.  A
+           finger collision here can pin the first finger that touches an
+           off-centre cube, making a symmetric gripper appear one-sided. -->
+      <xacro:unless value="${use_gazebo}">
+        <collision>
+          <geometry>
+            <box size="0.06 0.01 0.04"/>
+          </geometry>
+        </collision>
+      </xacro:unless>
     </link>
     <joint name="left_finger_joint" type="prismatic">
       <parent link="gripper_base_link"/>
       <child link="left_finger_link"/>
-      <origin xyz="0 0.025 0.04" rpy="0 0 0"/>
+      <!-- At zero travel the inner faces are 70 mm apart, enough to clear
+           the 50 mm target. Positive travel closes both fingers inward. -->
+      <origin xyz="0 0.040 0.04" rpy="0 0 0"/>
       <axis xyz="0 -1 0"/>
       <limit lower="0" upper="0.025" effort="20" velocity="0.2"/>
     </joint>
@@ -142,20 +149,22 @@
       </inertial>
       <visual>
         <geometry>
-          <box size="0.03 0.01 0.04"/>
+          <box size="0.06 0.01 0.04"/>
         </geometry>
         <material name="finger_red"/>
       </visual>
-      <collision>
-        <geometry>
-          <box size="0.03 0.01 0.04"/>
-        </geometry>
-      </collision>
+      <xacro:unless value="${use_gazebo}">
+        <collision>
+          <geometry>
+            <box size="0.06 0.01 0.04"/>
+          </geometry>
+        </collision>
+      </xacro:unless>
     </link>
     <joint name="right_finger_joint" type="prismatic">
       <parent link="gripper_base_link"/>
       <child link="right_finger_link"/>
-      <origin xyz="0 -0.025 0.04" rpy="0 0 0"/>
+      <origin xyz="0 -0.040 0.04" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <limit lower="0" upper="0.025" effort="20" velocity="0.2"/>
     </joint>
@@ -165,5 +174,13 @@
       <child link="gripper_tcp"/>
       <origin xyz="0 0 -0.105" rpy="0 0 0"/>
     </joint>
+    <gazebo reference="left_finger_link">
+      <mu1>2.0</mu1>
+      <mu2>2.0</mu2>
+    </gazebo>
+    <gazebo reference="right_finger_link">
+      <mu1>2.0</mu1>
+      <mu2>2.0</mu2>
+    </gazebo>
   </xacro:macro>
 </robot>

@@ -4,6 +4,7 @@
     <xacro:arg name="use_gazebo" default="false"/>
     <xacro:arg name="use_rviz_sim" default="false"/>
     <xacro:arg name="enable_camera_sensor" default="true"/>
+    <xacro:arg name="enable_grasp_attachment" default="false"/>
 
     <!-- Import jaka_zu3 urdf file -->
     <xacro:include filename="$(find jaka_description)/urdf/jaka_zu3.urdf" />
@@ -18,7 +19,9 @@
         parent="Link_6"
         use_gazebo="$(arg use_gazebo)"
         enable_camera_sensor="$(arg enable_camera_sensor)" />
-    <xacro:jaka_zu3_parallel_gripper parent="Link_6" />
+    <xacro:jaka_zu3_parallel_gripper
+        parent="Link_6"
+        use_gazebo="$(arg use_gazebo)" />
 
     <!-- 加载 ros2_control 配置 -->
     <xacro:jaka_zu3_ros2_control name="jaka_zu3_hardware" initial_positions_file="$(arg initial_positions_file)" use_gazebo="$(arg use_gazebo)" use_rviz_sim="$(arg use_rviz_sim)" />
@@ -27,10 +30,27 @@
     <xacro:if value="$(arg use_gazebo)">
         <gazebo>
             <plugin filename="gz_ros2_control-system"
-        name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+                    name="gz_ros2_control::GazeboSimROS2ControlPlugin">
                 <parameters>$(find jaka_zu3_moveit_config)/config/ros2_controllers.yaml</parameters>
             </plugin>
         </gazebo>
+        <!-- Gazebo contact friction alone is not reliable enough to keep a
+             small object between two position-controlled fingers.  Enable a
+             fixed attachment only for the guarded demo pick; target_motion
+             detaches it at startup and attaches it after both fingers close. -->
+        <xacro:if value="$(arg enable_grasp_attachment)">
+            <gazebo>
+                <plugin filename="ignition-gazebo-detachable-joint-system"
+                        name="ignition::gazebo::systems::DetachableJoint">
+                    <parent_link>Link_6</parent_link>
+                    <child_model>target_cube</child_model>
+                    <child_link>link</child_link>
+                    <detach_topic>/gripper/detach</detach_topic>
+                    <attach_topic>/gripper/attach</attach_topic>
+                    <output_topic>/gripper/attached</output_topic>
+                </plugin>
+            </gazebo>
+        </xacro:if>
     </xacro:if>
 
 </robot>

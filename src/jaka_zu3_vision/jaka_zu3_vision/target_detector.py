@@ -1,13 +1,16 @@
-"""Detect the red Gazebo target and publish its 3D position in world."""
+"""Detect a red RGB-D target and publish its 3D position."""
 
 import math
+from collections import deque
 
 import cv2
+import numpy as np
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PointStamped
 from tf2_geometry_msgs import do_transform_point
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -24,8 +27,16 @@ class TargetDetector(Node):
         self.declare_parameter('target_frame', 'world')
         self.declare_parameter('camera_frame', 'camera_optical_frame')
         self.declare_parameter('use_latest_tf', True)
+        self.declare_parameter('max_rgb_depth_delta', 0.25)
+        self.declare_parameter('point_topic', '/detected_target_point')
         self.declare_parameter('marker_topic', '/detected_target_marker')
         self.declare_parameter('min_area', 40.0)
+        self.declare_parameter('max_area', 6000.0)
+        self.declare_parameter('min_saturation', 90)
+        self.declare_parameter('min_value', 60)
+        self.declare_parameter('min_depth', 0.10)
+        self.declare_parameter('max_depth', 2.00)
+        self.declare_parameter('min_depth_samples', 8)
         self.declare_parameter('image_width', 128)
         self.declare_parameter('image_height', 96)
         self.declare_parameter('horizontal_fov', 1.047)
@@ -33,39 +44,61 @@ class TargetDetector(Node):
         self.bridge = CvBridge()
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.latest_depth = None
+        self.depth_frames = deque(maxlen=5)
         self.camera_info = None
         self.last_status_log = self.get_clock().now()
 
         self.create_subscription(
             Image, self.get_parameter('depth_topic').value,
-            self.depth_callback, 10)
+            self.depth_callback, qos_profile_sensor_data)
         self.create_subscription(
             CameraInfo, self.get_parameter('camera_info_topic').value,
-            self.info_callback, 10)
+            self.info_callback, qos_profile_sensor_data)
         self.create_subscription(
             Image, self.get_parameter('rgb_topic').value,
-            self.rgb_callback, 10)
+            self.rgb_callback, qos_profile_sensor_data)
         self.marker_pub = self.create_publisher(
             Marker, self.get_parameter('marker_topic').value, 10)
         self.point_pub = self.create_publisher(
-            PointStamped, '/detected_target_point', 10)
+            PointStamped, self.get_parameter('point_topic').value, 10)
         self.get_logger().info('Target detector started')
 
     def info_callback(self, msg):
         self.camera_info = msg
 
     def depth_callback(self, msg):
-        self.latest_depth = msg
+        self.depth_frames.append(msg)
+
+    def matching_depth(self, rgb_msg):
+        """Return the depth frame nearest to RGB, rejecting stale pairs."""
+        if not self.depth_frames:
+            return None
+        rgb_time = (rgb_msg.header.stamp.sec +
+                    rgb_msg.header.stamp.nanosec * 1e-9)
+        return min(
+            self.depth_frames,
+            key=lambda msg: abs(
+                msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+                - rgb_time),
+        )
 
     def rgb_callback(self, rgb_msg):
-        if self.latest_depth is None:
+        depth_msg = self.matching_depth(rgb_msg)
+        if depth_msg is None:
             self.log_status('waiting for depth image')
+            return
+        rgb_time = (rgb_msg.header.stamp.sec +
+                    rgb_msg.header.stamp.nanosec * 1e-9)
+        depth_time = (depth_msg.header.stamp.sec +
+                      depth_msg.header.stamp.nanosec * 1e-9)
+        if abs(rgb_time - depth_time) > float(
+                self.get_parameter('max_rgb_depth_delta').value):
+            self.log_status('waiting for synchronized RGB-D frames')
             return
         try:
             bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding='bgr8')
             depth = self.bridge.imgmsg_to_cv2(
-                self.latest_depth, desired_encoding='passthrough')
+                depth_msg, desired_encoding='passthrough')
         except Exception as exc:
             self.get_logger().warning(f'Image conversion failed: {exc}')
             return
@@ -75,26 +108,40 @@ class TargetDetector(Node):
             return
 
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        saturation = int(self.get_parameter('min_saturation').value)
+        value = int(self.get_parameter('min_value').value)
         # Red wraps around the HSV hue boundary, so use two ranges.
-        mask = cv2.inRange(hsv, (0, 100, 80), (10, 255, 255))
-        mask |= cv2.inRange(hsv, (170, 100, 80), (179, 255, 255))
+        mask = cv2.inRange(hsv, (0, saturation, value), (10, 255, 255))
+        mask |= cv2.inRange(hsv, (170, saturation, value), (179, 255, 255))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         contours, _ = cv2.findContours(
             mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        min_area = float(self.get_parameter('min_area').value)
+        max_area = float(self.get_parameter('max_area').value)
+        contours = [
+            contour for contour in contours
+            if min_area <= cv2.contourArea(contour) <= max_area
+        ]
         if not contours:
             return
         contour = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(contour) < self.get_parameter('min_area').value:
-            return
         moments = cv2.moments(contour)
         if moments['m00'] == 0:
             return
         u = int(moments['m10'] / moments['m00'])
         v = int(moments['m01'] / moments['m00'])
-        depth_value = self.sample_depth(depth, u, v)
-        if not math.isfinite(depth_value) or depth_value <= 0.0:
+        depth_value = self.sample_depth(
+            depth, mask, contour,
+            int(self.get_parameter('min_depth_samples').value))
+        min_depth = float(self.get_parameter('min_depth').value)
+        max_depth = float(self.get_parameter('max_depth').value)
+        if (not math.isfinite(depth_value) or
+                not min_depth <= depth_value <= max_depth):
             return
 
-        fx, fy, cx, cy = self.intrinsics()
+        fx, fy, cx, cy = self.intrinsics(bgr.shape[1], bgr.shape[0])
         point = PointStamped()
         point.header = rgb_msg.header
         # Gazebo scopes sensor headers under the spawned model name. Use the
@@ -131,12 +178,23 @@ class TargetDetector(Node):
             f'{world_point.point.y:.3f}, {world_point.point.z:.3f})',
             throttle_duration_sec=1.0)
 
-    def intrinsics(self):
+    def intrinsics(self, image_width, image_height):
+        """Return intrinsics scaled to the actual RGB image dimensions."""
         if self.camera_info is not None and self.camera_info.k[0] > 0.0:
             info = self.camera_info
-            return info.k[0], info.k[4], info.k[2], info.k[5]
-        width = float(self.get_parameter('image_width').value)
-        height = float(self.get_parameter('image_height').value)
+            source_width = float(info.width or image_width)
+            source_height = float(info.height or image_height)
+            scale_x = image_width / source_width
+            scale_y = image_height / source_height
+            return (
+                info.k[0] * scale_x,
+                info.k[4] * scale_y,
+                info.k[2] * scale_x,
+                info.k[5] * scale_y,
+            )
+        width = float(image_width or self.get_parameter('image_width').value)
+        height = float(
+            image_height or self.get_parameter('image_height').value)
         fov = float(self.get_parameter('horizontal_fov').value)
         focal = width / (2.0 * math.tan(fov / 2.0))
         self.log_status(
@@ -150,16 +208,24 @@ class TargetDetector(Node):
             self.last_status_log = now
 
     @staticmethod
-    def sample_depth(depth, u, v):
-        y0, y1 = max(0, v - 2), min(depth.shape[0], v + 3)
-        x0, x1 = max(0, u - 2), min(depth.shape[1], u + 3)
-        values = depth[y0:y1, x0:x1].astype('float32').reshape(-1)
+    def sample_depth(depth, mask, contour, min_samples=1):
+        """Use the median of valid pixels inside the detected object."""
+        object_mask = np.zeros_like(mask)
+        cv2.drawContours(object_mask, [contour], -1, 255, thickness=-1)
+        # Erode boundaries so background pixels do not bias the range reading.
+        object_mask = cv2.erode(object_mask, None, iterations=1)
+        if object_mask.shape != depth.shape:
+            object_mask = cv2.resize(
+                object_mask, (depth.shape[1], depth.shape[0]),
+                interpolation=cv2.INTER_NEAREST)
+        values = depth[object_mask > 0].astype('float32').reshape(-1)
         values = values[values > 0.0]
-        if values.size == 0:
+        values = values[np.isfinite(values)] if values.size else values
+        if values.size < min_samples:
             return float('nan')
         # Gazebo's R_FLOAT32 depth is metres; support uint16 millimetres too.
-        value = float(sorted(values.tolist())[len(values) // 2])
-        return value / 1000.0 if depth.dtype == 'uint16' else value
+        value = float(np.median(values))
+        return value / 1000.0 if np.issubdtype(depth.dtype, np.integer) else value
 
     def publish_marker(self, point):
         marker = Marker()
@@ -187,6 +253,12 @@ def main(args=None):
     node = TargetDetector()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    except RuntimeError:
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
