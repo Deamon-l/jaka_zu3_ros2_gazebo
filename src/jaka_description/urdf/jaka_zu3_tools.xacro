@@ -122,11 +122,12 @@
         </geometry>
         <material name="finger_red"/>
       </visual>
-      <!-- Keep contact geometry while commanding both finger joints from
-           the same trajectory; verify their measured positions before lift. -->
+      <!-- The visual finger reaches the ground when gripper_base_link is at
+           z=0.06. Inset the collision by 2 mm at each end so Gazebo ground
+           friction cannot pin the prismatic joint during lateral closing. -->
       <collision>
         <geometry>
-          <box size="0.06 0.01 0.04"/>
+          <box size="0.06 0.01 0.036"/>
         </geometry>
       </collision>
     </link>
@@ -135,15 +136,15 @@
       <child link="left_finger_link"/>
       <!-- Both simulated joints receive the same position trajectory. The
            legacy Gazebo mimic follower can lag when a finger makes contact. -->
-      <!-- At zero travel the inner faces are 70 mm apart, enough to clear
-           the 50 mm target. Positive travel closes both fingers inward. -->
-      <origin xyz="0 0.040 0.04" rpy="0 0 0"/>
+      <!-- At zero travel the inner faces are 40 mm apart, enough to clear
+           the 20 mm target. Positive travel closes both fingers inward. -->
+      <origin xyz="0 0.025 0.04" rpy="0 0 0"/>
       <axis xyz="0 -1 0"/>
       <!-- Keep the commanded open position (0) inside the physics limits.
            Starting exactly on the hard stop pins the first close in this
            Gazebo setup. Use the same interior open pose for every transfer.
            This 1 mm margin is not part of the commanded finger stroke. -->
-      <limit lower="-0.001" upper="0.025" effort="20" velocity="0.2"/>
+      <limit lower="-0.001" upper="0.011" effort="20" velocity="0.2"/>
     </joint>
     <link name="right_finger_link">
       <inertial>
@@ -156,19 +157,20 @@
         </geometry>
         <material name="finger_red"/>
       </visual>
+      <!-- Match the left finger's 2 mm ground-contact clearance. -->
       <collision>
         <geometry>
-          <box size="0.06 0.01 0.04"/>
+          <box size="0.06 0.01 0.036"/>
         </geometry>
       </collision>
     </link>
     <joint name="right_finger_joint" type="prismatic">
       <parent link="gripper_base_link"/>
       <child link="right_finger_link"/>
-      <origin xyz="0 -0.040 0.04" rpy="0 0 0"/>
+      <origin xyz="0 -0.025 0.04" rpy="0 0 0"/>
       <axis xyz="0 1 0"/>
       <!-- Same hard-stop margin as the left joint; open commands remain 0. -->
-      <limit lower="-0.001" upper="0.025" effort="20" velocity="0.2"/>
+      <limit lower="-0.001" upper="0.011" effort="20" velocity="0.2"/>
     </joint>
     <link name="gripper_tcp"/>
     <joint name="gripper_tcp_joint" type="fixed">

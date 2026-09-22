@@ -61,6 +61,21 @@ def test_point_distance_is_euclidean():
     assert TargetMotion.point_distance(first, second) == 3.0
 
 
+@pytest.mark.parametrize('object_top, expected_base', [
+    (0.020, 0.060),
+    (0.040, 0.060),
+    (0.041, 0.061),
+    (0.080, 0.100),
+])
+def test_gripper_base_height_uses_small_and_tall_object_rules(
+        object_top, expected_base):
+    """The 40 mm boundary belongs to the fixed-height small-object mode."""
+    result = TargetMotion.gripper_base_height(
+        object_top, 0.040, 0.060, 0.020)
+
+    assert result == pytest.approx(expected_base)
+
+
 @pytest.mark.parametrize('left, stamp_sec, expected', [
     (None, 10, False),       # Right-only feedback must not imply left closure.
     (0.0, 10, False),        # A stationary left finger must prevent lift.

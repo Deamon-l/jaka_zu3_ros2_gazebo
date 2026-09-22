@@ -1,5 +1,24 @@
 # JAKA ZU3 ROS2 Gazebo Simulation Project
 
+## Demo
+
+<p align="center">
+  <a href="docs/media/JAKA_ZU3_grasp.webm">
+    <img src="docs/media/JAKA_ZU3_grasp.gif" width="600" alt="JAKA ZU3 RGB-D visual pick-and-place demo"/>
+  </a>
+</p>
+
+<p align="center">
+  <b>👆 Click the demo to watch the full video</b>
+</p>
+
+<p align="center">
+  ROS 2 · MoveIt 2 · Gazebo · RGB-D Vision · Autonomous Grasping
+</p>
+
+The animation shows the complete vision-guided pick-and-place cycle. Click it
+to open the full WebM video.
+
 ## 1. Introduction
 
 This project is a ROS 2 based simulation platform for the JAKA ZU3 collaborative robot.
@@ -7,6 +26,9 @@ This project is a ROS 2 based simulation platform for the JAKA ZU3 collaborative
 The project integrates robot description, Gazebo simulation, MoveIt2 motion planning, and RGB-D vision processing.
 
 The main purpose is to build a robotic manipulation platform with visual perception and automatic motion control capabilities.
+
+> **Project status:** The complete pipeline has been validated in simulation.
+> A real JAKA robot and physical gripper have not yet been connected or tested.
 
 ## 2. Environment
 
@@ -46,6 +68,7 @@ Robot:
 - Timestamp-matched RGB and depth frames
 - Red-object segmentation with robust median depth estimation
 - Stable-target filtering and configurable workspace limits
+- Height-aware grasp poses for small and tall objects
 - MoveIt pick, configurable place, release, retreat and return sequence
 - Optional finite shuttle cycles between the destination and detected source
 - Symmetric two-finger commands with joint-position synchronization checks
@@ -80,7 +103,7 @@ ros2 launch jaka_zu3_moveit_config demo_gazebo.launch.py \
 ```
 
 The default performs one source-to-destination transfer and places the cube at
-`(0.35, -0.15, 0.05)` in `world`. To perform a round trip, moving the cube to
+`(0.35, -0.15, 0.02)` in `world`. To perform a round trip, moving the cube to
 the destination and then back to its initially detected source point:
 
 ```bash
@@ -117,6 +140,8 @@ causes a reopen/reclose retry at grasp height, then stops if it still fails.
 The finger model's lower joint limits are -1 mm while commanded opening stays
 at 0 mm. This small margin keeps the initial open pose off the physics hard
 stop, which otherwise pins the left finger on the first close in Gazebo.
+The visible fingers remain 40 mm tall, while their collision geometry is
+slightly shorter to prevent ground contact from blocking lateral closure.
 During the Gazebo demo, `use_sim_attachment` is
 enabled by the launch file only when
 `run_grasp:=true`; it is a simulation aid and is not part of real-robot grasp

@@ -26,25 +26,28 @@ target_motion:
     end_effector_link: gripper_base_link
     target_frame: world
     target_topic: /detected_target_point
+    # Height selection uses the detected top surface in world coordinates.
+    # Small objects: fingers span ground to 40 mm (base z fixed at 60 mm).
+    # Tall objects: finger top follows the object top (base = top + 20 mm).
+    object_height_threshold: 0.04
+    small_object_gripper_base_z: 0.06
+    large_object_top_offset_z: 0.02
     approach_offset_z: 0.14
-    grasp_offset_z: 0.0
     lift_offset_z: 0.16
     # Fixed destination in world. Z is the placed cube's top surface.
     place_x: 0.35
     place_y: -0.15
-    place_z: 0.05
+    place_z: 0.02
     place_approach_offset_z: 0.14
-    # Keep the gripper base above the cube/ground at the fixed destination.
-    place_release_offset_z: 0.02
     # 1: source -> destination; 2: destination -> original source as well.
     transfer_cycles: 1
     repeat_delay: 1.0
     # These joints move inward as the value increases.
     open_width: 0.0
-    # 10 mm travel on each side closes the 70 mm opening onto a 50 mm cube.
+    # 10 mm travel on each side closes the 40 mm opening onto a 20 mm cube.
     closed_width: 0.010
     gripper_min_position: 0.0
-    gripper_max_position: 0.025
+    gripper_max_position: 0.011
     gripper_motion_time: 2.0
     grasp_settle_time: 0.5
     # Never lift while one finger is late. Reopen/reclose once at grasp height.
@@ -63,13 +66,15 @@ target_motion:
     max_target_age: 0.75
     required_stable_detections: 5
     target_stability_tolerance: 0.015
-    position_tolerance: 0.01
+    position_tolerance: 0.005
     orientation_tolerance: 0.10
     planning_pipeline: pilz_industrial_motion_planner
     point_to_point_planner: PTP
     linear_planner: LIN
     velocity_scaling: 0.15
-    acceleration_scaling: 0.08
+    # Keep margin for Pilz LIN inverse-kinematics acceleration limits when
+    # the target moves away from the original world position.
+    acceleration_scaling: 0.05
     workspace_min_x: -0.75
     workspace_max_x: 0.75
     workspace_min_y: -0.75

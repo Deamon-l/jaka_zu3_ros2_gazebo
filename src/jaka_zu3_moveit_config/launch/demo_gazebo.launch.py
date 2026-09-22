@@ -293,7 +293,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "place_z",
-                default_value="0.05",
+                default_value="0.02",
                 description="Placed object's top-surface Z.",
             ),
             DeclareLaunchArgument(

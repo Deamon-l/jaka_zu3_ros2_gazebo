@@ -41,20 +41,19 @@ class TargetMotion(Node):
         self.declare_parameter('target_frame', 'world')
         self.declare_parameter('target_topic', '/detected_target_point')
         self.declare_parameter('approach_offset_z', 0.14)
-        # The detector reports the visible top surface.  At this offset the
-        # base stays above the object while the fingers surround its centre.
-        self.declare_parameter('grasp_offset_z', 0.0)
+        # The detector reports the object's top surface in world coordinates.
+        # For objects up to 40 mm, keep the finger bottoms at ground level.
+        # For taller objects, align the finger tops with the object top.
+        self.declare_parameter('object_height_threshold', 0.04)
+        self.declare_parameter('small_object_gripper_base_z', 0.06)
+        self.declare_parameter('large_object_top_offset_z', 0.02)
         self.declare_parameter('lift_offset_z', 0.16)
         # Coordinates describe the visible top surface of the placed object,
         # matching the detector's target-point convention.
         self.declare_parameter('place_x', 0.35)
         self.declare_parameter('place_y', -0.15)
-        self.declare_parameter('place_z', 0.05)
+        self.declare_parameter('place_z', 0.02)
         self.declare_parameter('place_approach_offset_z', 0.14)
-        # The configured fixed destination uses the physical cube-top height.
-        # Keep the gripper base 20 mm higher so the 40 mm fingers surround the
-        # cube instead of entering the ground plane.
-        self.declare_parameter('place_release_offset_z', 0.02)
         # One cycle moves source -> place. Two cycles move it back to the
         # first detected source, providing a finite round-trip demo.
         self.declare_parameter('transfer_cycles', 1)
@@ -63,7 +62,7 @@ class TargetMotion(Node):
         self.declare_parameter('open_width', 0.0)
         self.declare_parameter('closed_width', 0.010)
         self.declare_parameter('gripper_min_position', 0.0)
-        self.declare_parameter('gripper_max_position', 0.025)
+        self.declare_parameter('gripper_max_position', 0.011)
         self.declare_parameter('gripper_motion_time', 2.0)
         self.declare_parameter('grasp_settle_time', 0.5)
         self.declare_parameter('gripper_sync_timeout', 2.0)
@@ -88,7 +87,7 @@ class TargetMotion(Node):
         self.declare_parameter('point_to_point_planner', 'PTP')
         self.declare_parameter('linear_planner', 'LIN')
         self.declare_parameter('velocity_scaling', 0.15)
-        self.declare_parameter('acceleration_scaling', 0.08)
+        self.declare_parameter('acceleration_scaling', 0.05)
         self.declare_parameter('workspace_min_x', -0.75)
         self.declare_parameter('workspace_max_x', 0.75)
         self.declare_parameter('workspace_min_y', -0.75)
@@ -111,7 +110,6 @@ class TargetMotion(Node):
         self.target = None
         self.source_target = None
         self.place_target = None
-        self.place_release_offset = None
         self.completed_transfers = 0
         sample_count = max(
             1, int(self.get_parameter('required_stable_detections').value))
@@ -243,8 +241,11 @@ class TargetMotion(Node):
             self.source_target = self.copy_point(filtered_target)
         self.orientation = current.transform.rotation
         self.state = 'OPENING'
+        base_z = self.gripper_base_height_for(filtered_target.z)
         self.get_logger().info(
-            'Stable target acquired. Opening gripper before pre-grasp motion.')
+            f'Stable target acquired at top z={filtered_target.z:.3f} m; '
+            f'gripper base z={base_z:.3f} m. Opening gripper before '
+            'pre-grasp motion.')
         self.command_gripper(
             self.get_parameter('open_width').value, self.opened)
 
@@ -264,8 +265,7 @@ class TargetMotion(Node):
             return
         self.state = 'DESCENDING'
         self.send_arm_goal(
-            self.pose_goal(self.pose_at(
-                self.get_parameter('grasp_offset_z').value), linear=True),
+            self.pose_goal(self.pose_at(0.0), linear=True),
             self.descended)
 
     def descended(self, succeeded):
@@ -390,7 +390,6 @@ class TargetMotion(Node):
             self.fail('Could not lift the object')
             return
         self.place_target = self.next_place_target()
-        self.place_release_offset = self.next_place_release_offset()
         self.state = 'MOVING_TO_PLACE_ABOVE'
         self.get_logger().info(
             f'Object lifted. Moving above place point '
@@ -413,7 +412,7 @@ class TargetMotion(Node):
             self.pose_goal(
                 self.pose_for(
                     self.place_target,
-                    self.place_release_offset),
+                    0.0),
                 linear=True),
             self.place_descended)
 
@@ -502,7 +501,6 @@ class TargetMotion(Node):
             self.repeat_timer = None
         self.target = None
         self.place_target = None
-        self.place_release_offset = None
         self.orientation = None
         self.target_samples.clear()
         self.state = 'WAIT_TARGET'
@@ -518,9 +516,26 @@ class TargetMotion(Node):
         pose = Pose()
         pose.position.x = point.x
         pose.position.y = point.y
-        pose.position.z = point.z + z_offset
+        pose.position.z = self.gripper_base_height_for(point.z) + z_offset
         pose.orientation = self.orientation
         return pose
+
+    def gripper_base_height_for(self, object_top_z):
+        """Choose a base height that uses the full 40 mm finger surface."""
+        return self.gripper_base_height(
+            object_top_z,
+            float(self.get_parameter('object_height_threshold').value),
+            float(self.get_parameter('small_object_gripper_base_z').value),
+            float(self.get_parameter('large_object_top_offset_z').value),
+        )
+
+    @staticmethod
+    def gripper_base_height(
+            object_top_z, height_threshold, small_base_z, top_offset_z):
+        """Return fixed low-object height or top-aligned tall-object height."""
+        if object_top_z <= height_threshold:
+            return small_base_z
+        return object_top_z + top_offset_z
 
     def next_place_target(self):
         """Alternate between the configured destination and original source."""
@@ -531,12 +546,6 @@ class TargetMotion(Node):
             y=float(self.get_parameter('place_y').value),
             z=float(self.get_parameter('place_z').value),
         )
-
-    def next_place_release_offset(self):
-        """Use the pick height when returning to the detected source."""
-        if self.completed_transfers % 2 == 1:
-            return float(self.get_parameter('grasp_offset_z').value)
-        return float(self.get_parameter('place_release_offset_z').value)
 
     def joint_goal(self):
         constraints = Constraints()
@@ -791,19 +800,29 @@ class TargetMotion(Node):
         """Reject unsafe or internally inconsistent motion parameters."""
         errors = []
         approach = float(self.get_parameter('approach_offset_z').value)
-        grasp = float(self.get_parameter('grasp_offset_z').value)
         lift = float(self.get_parameter('lift_offset_z').value)
-        if approach <= grasp:
-            errors.append('approach_offset_z must exceed grasp_offset_z')
-        if lift <= grasp:
-            errors.append('lift_offset_z must exceed grasp_offset_z')
+        if approach <= 0.0:
+            errors.append('approach_offset_z must be positive')
+        if lift <= 0.0:
+            errors.append('lift_offset_z must be positive')
         place_approach = float(
             self.get_parameter('place_approach_offset_z').value)
-        place_release = float(
-            self.get_parameter('place_release_offset_z').value)
-        if place_approach <= place_release:
+        if place_approach <= 0.0:
+            errors.append('place_approach_offset_z must be positive')
+        threshold = float(
+            self.get_parameter('object_height_threshold').value)
+        small_base = float(
+            self.get_parameter('small_object_gripper_base_z').value)
+        top_offset = float(
+            self.get_parameter('large_object_top_offset_z').value)
+        if threshold < 0.0:
+            errors.append('object_height_threshold must be non-negative')
+        if small_base <= threshold:
             errors.append(
-                'place_approach_offset_z must exceed place_release_offset_z')
+                'small_object_gripper_base_z must exceed '
+                'object_height_threshold')
+        if top_offset < 0.0:
+            errors.append('large_object_top_offset_z must be non-negative')
         place = Point(
             x=float(self.get_parameter('place_x').value),
             y=float(self.get_parameter('place_y').value),
@@ -811,7 +830,7 @@ class TargetMotion(Node):
         )
         if not self.target_is_safe(place):
             errors.append('configured place point is outside the workspace')
-        if (place.z + place_approach >
+        if (self.gripper_base_height_for(place.z) + place_approach >
                 float(self.get_parameter('workspace_max_z').value)):
             errors.append('place approach pose exceeds workspace_max_z')
         minimum = float(self.get_parameter('gripper_min_position').value)
