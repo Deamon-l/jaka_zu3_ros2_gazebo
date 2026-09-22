@@ -86,7 +86,7 @@ the destination and then back to its initially detected source point:
 ```bash
 ros2 launch jaka_zu3_moveit_config demo_gazebo.launch.py \
   enable_camera:=true run_grasp:=true execute_grasp:=true \
-  transfer_cycles:=2 place_x:=0.35 place_y:=-0.15 place_z:=0.05
+  transfer_cycles:=2 place_x:=0.35 place_y:=-0.15 place_z:=0.02
 ```
 
 For a server-only run, append `headless:=true use_rviz:=false`. Motion is
@@ -98,8 +98,10 @@ and the camera-to-optical-frame transform are not altered by this file. The
 most commonly adjusted values are:
 
 - `min_area`, `max_area`, `min_depth`, and `max_depth` for detection
-- `approach_offset_z`, `grasp_offset_z`, and `lift_offset_z` for motion
-- `place_x`, `place_y`, `place_z`, and `place_*_offset_z` for placement
+- `object_height_threshold`, `small_object_gripper_base_z`, and
+  `large_object_top_offset_z` for height-aware grasping
+- `approach_offset_z`, `lift_offset_z`, and `place_approach_offset_z` for motion
+- `place_x`, `place_y`, and `place_z` for placement
 - `transfer_cycles` and `repeat_delay` for finite shuttle operation
 - `open_width` and `closed_width` for the inward-moving finger joints
 - `finger_sync_tolerance` and `finger_goal_tolerance` for close verification
