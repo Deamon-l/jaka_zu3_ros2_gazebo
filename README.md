@@ -3,21 +3,21 @@
 ## Demo
 
 <p align="center">
-  <a href="docs/media/JAKA_ZU3_grasp.webm">
-    <img src="docs/media/JAKA_ZU3_grasp.gif" width="600" alt="JAKA ZU3 RGB-D visual pick-and-place demo"/>
-  </a>
+  <img src="docs/media/JAKA_ZU3_grasp.gif" width="600" alt="JAKA ZU3 RGB-D visual pick-and-place demo"/>
 </p>
 
 <p align="center">
-  <b>👆 Click the demo to watch the full video</b>
+  <b>Vision-guided round-trip pick-and-place demo</b>
 </p>
 
 <p align="center">
   ROS 2 · MoveIt 2 · Gazebo · RGB-D Vision · Autonomous Grasping
 </p>
 
-The animation shows the complete vision-guided pick-and-place cycle. Click it
-to open the full WebM video.
+The animation shows the complete vision-guided pick-and-place cycle.
+The original recording is also available as a
+[WebM video](docs/media/JAKA_ZU3_grasp.webm) (GitHub may download it or show
+"View raw" instead of playing it in the browser).
 
 ## 1. Introduction
 
