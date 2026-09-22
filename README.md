@@ -46,7 +46,8 @@ Robot:
 - Timestamp-matched RGB and depth frames
 - Red-object segmentation with robust median depth estimation
 - Stable-target filtering and configurable workspace limits
-- MoveIt pre-grasp, descend and lift sequence
+- MoveIt pick, configurable place, release, retreat and return sequence
+- Optional finite shuttle cycles between the destination and detected source
 - Symmetric two-finger commands with joint-position synchronization checks
 - Gazebo-only object attachment after a confirmed close, so the simulated
   object follows the gripper during lift instead of relying on contact
@@ -78,6 +79,16 @@ ros2 launch jaka_zu3_moveit_config demo_gazebo.launch.py \
   enable_camera:=true run_grasp:=true execute_grasp:=true
 ```
 
+The default performs one source-to-destination transfer and places the cube at
+`(0.35, -0.15, 0.05)` in `world`. To perform a round trip, moving the cube to
+the destination and then back to its initially detected source point:
+
+```bash
+ros2 launch jaka_zu3_moveit_config demo_gazebo.launch.py \
+  enable_camera:=true run_grasp:=true execute_grasp:=true \
+  transfer_cycles:=2 place_x:=0.35 place_y:=-0.15 place_z:=0.05
+```
+
 For a server-only run, append `headless:=true use_rviz:=false`. Motion is
 disabled by default and is enabled only when `execute_grasp:=true` is passed.
 
@@ -88,13 +99,24 @@ most commonly adjusted values are:
 
 - `min_area`, `max_area`, `min_depth`, and `max_depth` for detection
 - `approach_offset_z`, `grasp_offset_z`, and `lift_offset_z` for motion
+- `place_x`, `place_y`, `place_z`, and `place_*_offset_z` for placement
+- `transfer_cycles` and `repeat_delay` for finite shuttle operation
 - `open_width` and `closed_width` for the inward-moving finger joints
 - `finger_sync_tolerance` and `finger_goal_tolerance` for close verification
+- `gripper_sync_timeout` and `gripper_close_attempts` for a bounded
+  reopen/reclose retry before lifting
 - `workspace_min_*` and `workspace_max_*` for target safety limits
 
-The left and right prismatic joints use opposite axes and receive the same
-positive position, so both fingers move inward by the same amount. During the
-Gazebo demo, `use_sim_attachment` is enabled by the launch file only when
+Both prismatic joints receive equal positions in a single gripper trajectory.
+Their opposite axes move both fingers inward. Before attaching or lifting,
+the motion node checks fresh measured feedback from each finger (within
+1 mm of each other and 2 mm of the closed target); missing or stalled feedback
+causes a reopen/reclose retry at grasp height, then stops if it still fails.
+The finger model's lower joint limits are -1 mm while commanded opening stays
+at 0 mm. This small margin keeps the initial open pose off the physics hard
+stop, which otherwise pins the left finger on the first close in Gazebo.
+During the Gazebo demo, `use_sim_attachment` is
+enabled by the launch file only when
 `run_grasp:=true`; it is a simulation aid and is not part of real-robot grasp
 control.
 

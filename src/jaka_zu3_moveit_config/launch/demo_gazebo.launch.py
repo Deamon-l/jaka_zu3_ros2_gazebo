@@ -1,17 +1,18 @@
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
     IncludeLaunchDescription,
     RegisterEventHandler,
+    SetEnvironmentVariable,
     TimerAction,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     LaunchConfiguration,
     PathJoinSubstitution,
-    PythonExpression,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -23,9 +24,21 @@ def generate_launch_description():
     enable_camera = LaunchConfiguration("enable_camera")
     run_grasp = LaunchConfiguration("run_grasp")
     execute_grasp = LaunchConfiguration("execute_grasp")
+    transfer_cycles = LaunchConfiguration("transfer_cycles")
+    place_x = LaunchConfiguration("place_x")
+    place_y = LaunchConfiguration("place_y")
+    place_z = LaunchConfiguration("place_z")
     vision_params_file = LaunchConfiguration("vision_params_file")
     headless = LaunchConfiguration("headless")
     use_rviz = LaunchConfiguration("use_rviz")
+
+    fastdds_udp_profile = PathJoinSubstitution(
+        [
+            FindPackageShare("jaka_zu3_moveit_config"),
+            "config",
+            "fastdds_udp.xml",
+        ]
+    )
 
     # 1. 载入 MoveIt 配置，开启 Gazebo 硬件模式
     moveit_config = (
@@ -42,7 +55,9 @@ def generate_launch_description():
         .to_moveit_configs()
     )
 
-    # 2. Start the regular Gazebo server and GUI with rendering sensors enabled.
+    # 2. Start the Gazebo server first.  Starting the GUI at the same time can
+    # make EGL/shader initialisation block the simulation update loop before
+    # gz_ros2_control has created controller_manager.
     ign_gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution(
@@ -51,10 +66,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "gz_args": [
-                PythonExpression(
-                    ["'-s' if '", headless, "' == 'true' else ''"]
-                ),
-                " -r ",
+                "-s -r ",
                 PathJoinSubstitution(
                     [
                         FindPackageShare("jaka_zu3_moveit_config"),
@@ -66,12 +78,33 @@ def generate_launch_description():
         }.items(),
     )
 
+    # Attach the GUI independently of controller startup.  The server gets a
+    # short head start, but a controller error must never prevent the user
+    # from opening Gazebo and seeing its diagnostics.
+    gazebo_gui = ExecuteProcess(
+        cmd=["ign", "gazebo", "-g"],
+        condition=UnlessCondition(headless),
+        output="screen",
+    )
+    delayed_gazebo_gui = TimerAction(
+        period=3.0,
+        actions=[gazebo_gui],
+    )
+
     # 3. 在 Ignition 中生成机械臂实体
     spawn_entity = Node(
         package="ros_gz_sim",
         executable="create",
         arguments=["-topic", "robot_description", "-name", "jaka_zu3"],
         output="screen",
+    )
+    # robot_state_publisher and Gazebo are started together.  Give the ROS
+    # parameter service time to become discoverable before gz_ros2_control
+    # requests robot_description; otherwise the control plugin can wait
+    # forever and controller_manager is never created.
+    delayed_spawn_entity = TimerAction(
+        period=2.0,
+        actions=[spawn_entity],
     )
 
     # 4. Bridge simulation time immediately. Camera subscriptions are delayed
@@ -135,6 +168,12 @@ def generate_launch_description():
                 "execute_motion": ParameterValue(
                     execute_grasp, value_type=bool
                 ),
+                "transfer_cycles": ParameterValue(
+                    transfer_cycles, value_type=int
+                ),
+                "place_x": ParameterValue(place_x, value_type=float),
+                "place_y": ParameterValue(place_y, value_type=float),
+                "place_z": ParameterValue(place_z, value_type=float),
                 "use_sim_attachment": True,
             },
         ],
@@ -209,6 +248,12 @@ def generate_launch_description():
             ),
         ],
     )
+    # RViz and move_group are also independent of controller activation.
+    # MoveIt can wait for its action servers while the UI remains available.
+    delayed_moveit_ui = TimerAction(
+        period=3.0,
+        actions=[move_group, rviz],
+    )
 
     return LaunchDescription(
         [
@@ -227,6 +272,29 @@ def generate_launch_description():
                 "execute_grasp",
                 default_value="false",
                 description="Execute trajectories instead of plan-only mode.",
+            ),
+            DeclareLaunchArgument(
+                "transfer_cycles",
+                default_value="1",
+                description=(
+                    "Number of pick-and-place transfers; 2 performs a "
+                    "round trip."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "place_x",
+                default_value="0.35",
+                description="Place-point X in the target frame.",
+            ),
+            DeclareLaunchArgument(
+                "place_y",
+                default_value="-0.15",
+                description="Place-point Y in the target frame.",
+            ),
+            DeclareLaunchArgument(
+                "place_z",
+                default_value="0.05",
+                description="Placed object's top-surface Z.",
             ),
             DeclareLaunchArgument(
                 "headless",
@@ -248,13 +316,22 @@ def generate_launch_description():
                     ]
                 ),
             ),
+            # Disable Fast DDS shared memory for this launch. Interrupted
+            # simulator runs otherwise leave stale SHM ports that can block
+            # every subsequent ROS node before it prints its first log line.
+            SetEnvironmentVariable(
+                name="FASTRTPS_DEFAULT_PROFILES_FILE",
+                value=fastdds_udp_profile,
+            ),
             ign_gazebo,
+            delayed_gazebo_gui,
             clock_bridge,
             camera_bridge,
             camera_info_bridge,
             grasp_attachment_bridge,
             rsp,
-            spawn_entity,
+            delayed_spawn_entity,
+            delayed_moveit_ui,
             # Do not let TF consumers observe the Gazebo startup clock reset.
             # Spawn the robot first, then activate controllers, and only then
             # start MoveIt/RViz/vision nodes.
@@ -267,7 +344,7 @@ def generate_launch_description():
             RegisterEventHandler(
                 event_handler=OnProcessExit(
                     target_action=controllers_spawner,
-                    on_exit=[move_group, rviz, target_motion],
+                    on_exit=[target_motion],
                 )
             ),
         ]

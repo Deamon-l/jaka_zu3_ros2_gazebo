@@ -1,4 +1,4 @@
-"""Plan and execute a vision-gated top-down RGB-D pick in Gazebo."""
+"""Plan and execute a vision-gated top-down RGB-D pick-and-place."""
 
 import math
 from collections import deque
@@ -26,7 +26,7 @@ from trajectory_msgs.msg import JointTrajectoryPoint
 
 
 class TargetMotion(Node):
-    """Observe first, then execute open, approach, descend, close, and lift."""
+    """Execute guarded pick, place, retreat, and optional shuttle cycles."""
 
     POSE_1 = (0.0, 1.5707, -1.5707, 1.5707, 1.5707, 0.0)
     JOINT_NAMES = tuple(f'joint_{index}' for index in range(1, 7))
@@ -45,6 +45,20 @@ class TargetMotion(Node):
         # base stays above the object while the fingers surround its centre.
         self.declare_parameter('grasp_offset_z', 0.0)
         self.declare_parameter('lift_offset_z', 0.16)
+        # Coordinates describe the visible top surface of the placed object,
+        # matching the detector's target-point convention.
+        self.declare_parameter('place_x', 0.35)
+        self.declare_parameter('place_y', -0.15)
+        self.declare_parameter('place_z', 0.05)
+        self.declare_parameter('place_approach_offset_z', 0.14)
+        # The configured fixed destination uses the physical cube-top height.
+        # Keep the gripper base 20 mm higher so the 40 mm fingers surround the
+        # cube instead of entering the ground plane.
+        self.declare_parameter('place_release_offset_z', 0.02)
+        # One cycle moves source -> place. Two cycles move it back to the
+        # first detected source, providing a finite round-trip demo.
+        self.declare_parameter('transfer_cycles', 1)
+        self.declare_parameter('repeat_delay', 1.0)
         # Finger joints move inward as their position increases.
         self.declare_parameter('open_width', 0.0)
         self.declare_parameter('closed_width', 0.010)
@@ -52,8 +66,11 @@ class TargetMotion(Node):
         self.declare_parameter('gripper_max_position', 0.025)
         self.declare_parameter('gripper_motion_time', 2.0)
         self.declare_parameter('grasp_settle_time', 0.5)
-        self.declare_parameter('finger_sync_tolerance', 0.003)
-        self.declare_parameter('finger_goal_tolerance', 0.005)
+        self.declare_parameter('gripper_sync_timeout', 2.0)
+        self.declare_parameter('gripper_close_attempts', 2)
+        self.declare_parameter('finger_sync_tolerance', 0.001)
+        self.declare_parameter('finger_goal_tolerance', 0.002)
+        self.declare_parameter('finger_state_timeout', 0.5)
         self.declare_parameter('use_sim_attachment', False)
         self.declare_parameter('attachment_timeout', 3.0)
         self.declare_parameter('attach_topic', '/gripper/attach')
@@ -92,6 +109,10 @@ class TargetMotion(Node):
             self.get_parameter('gripper_action').value)
         self.state = 'WAIT_SERVER'
         self.target = None
+        self.source_target = None
+        self.place_target = None
+        self.place_release_offset = None
+        self.completed_transfers = 0
         sample_count = max(
             1, int(self.get_parameter('required_stable_detections').value))
         self.target_samples = deque(maxlen=sample_count)
@@ -103,7 +124,11 @@ class TargetMotion(Node):
         self.object_attached = False
         self.startup_detach_attempts = 0
         self.startup_detach_timer = None
+        self.repeat_timer = None
         self.finger_positions = {}
+        self.finger_state_times = {}
+        self.close_attempts = 0
+        self.finger_sync_started_ns = None
         self.create_subscription(
             PointStamped,
             self.get_parameter('target_topic').value, self.target_callback, 10)
@@ -214,6 +239,8 @@ class TargetMotion(Node):
             return
 
         self.target = filtered_target
+        if self.source_target is None:
+            self.source_target = self.copy_point(filtered_target)
         self.orientation = current.transform.rotation
         self.state = 'OPENING'
         self.get_logger().info(
@@ -245,29 +272,76 @@ class TargetMotion(Node):
         if not succeeded:
             self.fail('Could not reach the grasp pose')
             return
+        self.close_attempts = 0
+        self.command_close()
+
+    def command_close(self):
+        """Close both fingers and remember bounded retry attempts."""
+        self.close_attempts += 1
         self.state = 'CLOSING'
         self.command_gripper(
             self.get_parameter('closed_width').value, self.closed)
 
     def closed(self, succeeded):
         if not succeeded:
-            self.fail('Could not close gripper')
+            self.retry_close_or_fail('Gripper close action did not succeed')
             return
         # Wait for joint_states to catch the final controller sample before
         # checking that both fingers actually closed together.
+        self.finger_sync_started_ns = self.get_clock().now().nanoseconds
         self.settle_timer = self.create_timer(
             self.get_parameter('grasp_settle_time').value,
             self.finish_close)
 
     def finish_close(self):
+        if self.fingers_reached_goal(
+                float(self.get_parameter('closed_width').value)):
+            self.cancel_settle_timer()
+            self.continue_after_close()
+            return
+
+        elapsed = (
+            self.get_clock().now().nanoseconds - self.finger_sync_started_ns
+        ) / 1e9
+        if elapsed < float(
+                self.get_parameter('gripper_sync_timeout').value):
+            return
+
+        self.cancel_settle_timer()
+        self.retry_close_or_fail(
+            'Finger positions did not synchronize at the grasp')
+
+    def retry_close_or_fail(self, reason):
+        """Reopen and reclose at the grasp pose instead of lifting early."""
+        maximum = int(self.get_parameter('gripper_close_attempts').value)
+        if self.close_attempts >= maximum:
+            self.fail(
+                f'{reason} after {self.close_attempts} close attempt(s); '
+                'the arm will not lift an incompletely closed gripper')
+            return
+        self.state = 'REOPENING_FOR_CLOSE_RETRY'
+        self.get_logger().warning(
+            f'{reason}; reopening and retrying while the arm remains at '
+            f'the grasp pose ({self.close_attempts + 1}/{maximum}).')
+        self.command_gripper(
+            self.get_parameter('open_width').value,
+            self.close_retry_opened)
+
+    def close_retry_opened(self, succeeded):
+        if not succeeded:
+            self.fail('Could not reopen gripper before close retry')
+            return
+        self.command_close()
+
+    def cancel_settle_timer(self):
         if self.settle_timer is not None:
             self.settle_timer.cancel()
             self.settle_timer = None
-        if not self.fingers_reached_goal(
-                float(self.get_parameter('closed_width').value)):
-            self.get_logger().warning(
-                'Finger positions are not synchronized at the grasp; '
-                'continuing with the Gazebo attachment fallback.')
+
+    def continue_after_close(self):
+        """Attach/lift only after both finger joint states are verified."""
+        self.get_logger().info(
+            'Both finger joints reached the closed position together.')
         if not self.get_parameter('use_sim_attachment').value:
             self.begin_lift()
             return
@@ -303,9 +377,7 @@ class TargetMotion(Node):
         self.attach_publisher.publish(Empty())
 
     def begin_lift(self):
-        if self.settle_timer is not None:
-            self.settle_timer.cancel()
-            self.settle_timer = None
+        self.cancel_settle_timer()
         self.state = 'LIFTING'
         self.send_arm_goal(
             self.pose_goal(
@@ -314,19 +386,157 @@ class TargetMotion(Node):
             self.lifted)
 
     def lifted(self, succeeded):
-        if succeeded:
-            self.state = 'DONE'
-            self.get_logger().info('Pick sequence completed.')
-        else:
+        if not succeeded:
             self.fail('Could not lift the object')
+            return
+        self.place_target = self.next_place_target()
+        self.place_release_offset = self.next_place_release_offset()
+        self.state = 'MOVING_TO_PLACE_ABOVE'
+        self.get_logger().info(
+            f'Object lifted. Moving above place point '
+            f'({self.place_target.x:.3f}, {self.place_target.y:.3f}, '
+            f'{self.place_target.z:.3f}).')
+        self.send_arm_goal(
+            self.pose_goal(
+                self.pose_for(
+                    self.place_target,
+                    self.get_parameter('place_approach_offset_z').value),
+                linear=False),
+            self.place_above_done)
+
+    def place_above_done(self, succeeded):
+        if not succeeded:
+            self.fail('Could not reach the place approach pose')
+            return
+        self.state = 'DESCENDING_TO_PLACE'
+        self.send_arm_goal(
+            self.pose_goal(
+                self.pose_for(
+                    self.place_target,
+                    self.place_release_offset),
+                linear=True),
+            self.place_descended)
+
+    def place_descended(self, succeeded):
+        if not succeeded:
+            self.fail('Could not reach the place release pose')
+            return
+        self.state = 'OPENING_TO_RELEASE'
+        self.command_gripper(
+            self.get_parameter('open_width').value, self.release_opened)
+
+    def release_opened(self, succeeded):
+        if not succeeded:
+            self.fail('Could not open the gripper at the place pose')
+            return
+        if not self.get_parameter('use_sim_attachment').value:
+            self.begin_place_retreat()
+            return
+        self.state = 'DETACHING'
+        self.attachment_state_received = False
+        self.attachment_started_ns = self.get_clock().now().nanoseconds
+        self.detach_publisher.publish(Empty())
+        self.attachment_timer = self.create_timer(
+            0.1, self.wait_for_detachment)
+
+    def wait_for_detachment(self):
+        if self.attachment_state_received and not self.object_attached:
+            self.attachment_timer.cancel()
+            self.attachment_timer = None
+            self.get_logger().info('Gazebo object release confirmed.')
+            self.begin_place_retreat()
+            return
+        elapsed = (
+            self.get_clock().now().nanoseconds - self.attachment_started_ns
+        ) / 1e9
+        if elapsed >= float(self.get_parameter('attachment_timeout').value):
+            self.attachment_timer.cancel()
+            self.attachment_timer = None
+            self.get_logger().warning(
+                'Gazebo did not publish detach confirmation; retreating '
+                'after repeated detach commands.')
+            self.begin_place_retreat()
+            return
+        self.detach_publisher.publish(Empty())
+
+    def begin_place_retreat(self):
+        self.state = 'RETREATING_FROM_PLACE'
+        self.send_arm_goal(
+            self.pose_goal(
+                self.pose_for(
+                    self.place_target,
+                    self.get_parameter('place_approach_offset_z').value),
+                linear=True),
+            self.place_retreated)
+
+    def place_retreated(self, succeeded):
+        if not succeeded:
+            self.fail('Could not retreat from the place pose')
+            return
+        self.completed_transfers += 1
+        total = int(self.get_parameter('transfer_cycles').value)
+        if self.completed_transfers < total:
+            # Stay above the object just placed. Returning to the original
+            # observation pose can put the destination outside the wrist
+            # camera's field of view and leave the next cycle in WAIT_TARGET.
+            self.state = 'WAIT_REPEAT'
+            self.repeat_timer = self.create_timer(
+                float(self.get_parameter('repeat_delay').value),
+                self.start_next_transfer)
+            return
+        self.state = 'RETURNING_TO_OBSERVE'
+        self.send_arm_goal(self.joint_goal(), self.returned_to_observe)
+
+    def returned_to_observe(self, succeeded):
+        if not succeeded:
+            self.fail('Could not return to the observation pose after place')
+            return
+        self.state = 'DONE'
+        self.get_logger().info(
+            f'Pick-and-place completed: {self.completed_transfers} '
+            'transfer cycle(s).')
+
+    def start_next_transfer(self):
+        if self.repeat_timer is not None:
+            self.repeat_timer.cancel()
+            self.repeat_timer = None
+        self.target = None
+        self.place_target = None
+        self.place_release_offset = None
+        self.orientation = None
+        self.target_samples.clear()
+        self.state = 'WAIT_TARGET'
+        self.get_logger().info(
+            f'Waiting for the object for transfer '
+            f'{self.completed_transfers + 1}/'
+            f'{self.get_parameter("transfer_cycles").value}.')
 
     def pose_at(self, z_offset):
+        return self.pose_for(self.target, z_offset)
+
+    def pose_for(self, point, z_offset):
         pose = Pose()
-        pose.position.x = self.target.x
-        pose.position.y = self.target.y
-        pose.position.z = self.target.z + z_offset
+        pose.position.x = point.x
+        pose.position.y = point.y
+        pose.position.z = point.z + z_offset
         pose.orientation = self.orientation
         return pose
+
+    def next_place_target(self):
+        """Alternate between the configured destination and original source."""
+        if self.completed_transfers % 2 == 1:
+            return self.copy_point(self.source_target)
+        return Point(
+            x=float(self.get_parameter('place_x').value),
+            y=float(self.get_parameter('place_y').value),
+            z=float(self.get_parameter('place_z').value),
+        )
+
+    def next_place_release_offset(self):
+        """Use the pick height when returning to the detected source."""
+        if self.completed_transfers % 2 == 1:
+            return float(self.get_parameter('grasp_offset_z').value)
+        return float(self.get_parameter('place_release_offset_z').value)
 
     def joint_goal(self):
         constraints = Constraints()
@@ -407,6 +617,8 @@ class TargetMotion(Node):
             done_callback(True)
             return
         goal = FollowJointTrajectory.Goal()
+        # Send both targets in one action so neither finger waits for the
+        # other finger's measured motion before it starts closing.
         goal.trajectory.joint_names = [
             'left_finger_joint', 'right_finger_joint']
         point = JointTrajectoryPoint()
@@ -418,9 +630,14 @@ class TargetMotion(Node):
 
     def joint_state_callback(self, message):
         positions = dict(zip(message.name, message.position))
+        stamp = message.header.stamp
+        stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
         for name in ('left_finger_joint', 'right_finger_joint'):
             if name in positions:
+                # Never infer one finger's feedback from the other: contact
+                # can stop one finger even when the commanded targets match.
                 self.finger_positions[name] = positions[name]
+                self.finger_state_times[name] = stamp_ns
 
     def attachment_state_callback(self, message):
         state = message.data.strip().lower()
@@ -452,6 +669,16 @@ class TargetMotion(Node):
         if left is None or right is None:
             self.get_logger().error('Finger joint states are unavailable')
             return False
+        now = self.get_clock().now().nanoseconds
+        max_age = float(self.get_parameter('finger_state_timeout').value)
+        for name in ('left_finger_joint', 'right_finger_joint'):
+            stamp = self.finger_state_times.get(name)
+            if stamp is None or not 0.0 <= (now - stamp) / 1e9 <= max_age:
+                self.get_logger().warning(f'Stale finger joint state: {name}')
+                return False
+            if (self.finger_sync_started_ns is not None and
+                    stamp < self.finger_sync_started_ns):
+                return False
         sync_tolerance = float(
             self.get_parameter('finger_sync_tolerance').value)
         goal_tolerance = float(
@@ -539,6 +766,9 @@ class TargetMotion(Node):
         if self.startup_detach_timer is not None:
             self.startup_detach_timer.cancel()
             self.startup_detach_timer = None
+        if self.repeat_timer is not None:
+            self.repeat_timer.cancel()
+            self.repeat_timer = None
         if (self.detach_publisher is not None and self.object_attached):
             self.detach_publisher.publish(Empty())
         self.state = 'FAILED'
@@ -567,6 +797,23 @@ class TargetMotion(Node):
             errors.append('approach_offset_z must exceed grasp_offset_z')
         if lift <= grasp:
             errors.append('lift_offset_z must exceed grasp_offset_z')
+        place_approach = float(
+            self.get_parameter('place_approach_offset_z').value)
+        place_release = float(
+            self.get_parameter('place_release_offset_z').value)
+        if place_approach <= place_release:
+            errors.append(
+                'place_approach_offset_z must exceed place_release_offset_z')
+        place = Point(
+            x=float(self.get_parameter('place_x').value),
+            y=float(self.get_parameter('place_y').value),
+            z=float(self.get_parameter('place_z').value),
+        )
+        if not self.target_is_safe(place):
+            errors.append('configured place point is outside the workspace')
+        if (place.z + place_approach >
+                float(self.get_parameter('workspace_max_z').value)):
+            errors.append('place approach pose exceeds workspace_max_z')
         minimum = float(self.get_parameter('gripper_min_position').value)
         maximum = float(self.get_parameter('gripper_max_position').value)
         opened = float(self.get_parameter('open_width').value)
@@ -576,14 +823,26 @@ class TargetMotion(Node):
                 'gripper positions must satisfy min <= open < close <= max')
         if int(self.get_parameter('required_stable_detections').value) < 1:
             errors.append('required_stable_detections must be at least one')
+        if int(self.get_parameter('transfer_cycles').value) < 1:
+            errors.append('transfer_cycles must be at least one')
+        if float(self.get_parameter('repeat_delay').value) <= 0.0:
+            errors.append('repeat_delay must be positive')
         if float(self.get_parameter('action_timeout').value) <= 0.0:
             errors.append('action_timeout must be positive')
         if float(self.get_parameter('attachment_timeout').value) <= 0.0:
             errors.append('attachment_timeout must be positive')
+        if float(self.get_parameter('grasp_settle_time').value) <= 0.0:
+            errors.append('grasp_settle_time must be positive')
+        if float(self.get_parameter('gripper_sync_timeout').value) <= 0.0:
+            errors.append('gripper_sync_timeout must be positive')
+        if int(self.get_parameter('gripper_close_attempts').value) < 1:
+            errors.append('gripper_close_attempts must be at least one')
         if float(self.get_parameter('finger_sync_tolerance').value) < 0.0:
             errors.append('finger_sync_tolerance must be non-negative')
         if float(self.get_parameter('finger_goal_tolerance').value) < 0.0:
             errors.append('finger_goal_tolerance must be non-negative')
+        if float(self.get_parameter('finger_state_timeout').value) <= 0.0:
+            errors.append('finger_state_timeout must be positive')
         for name in ('velocity_scaling', 'acceleration_scaling'):
             scaling = float(self.get_parameter(name).value)
             if not 0.0 < scaling <= 1.0:
@@ -596,6 +855,11 @@ class TargetMotion(Node):
         for error in errors:
             self.get_logger().error(error)
         return not errors
+
+    @staticmethod
+    def copy_point(point):
+        """Copy a geometry point so later detections cannot mutate it."""
+        return Point(x=point.x, y=point.y, z=point.z)
 
     @staticmethod
     def median_point(points):

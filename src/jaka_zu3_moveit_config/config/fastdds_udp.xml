@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <!--
+      Use UDP only.  Repeatedly interrupted Gazebo runs can leave Fast DDS
+      shared-memory ports behind and then block new ROS participants during
+      startup.  UDP loopback is sufficient for this single-machine demo and
+      does not depend on those /dev/shm resources.
+    -->
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>jaka_udp_transport</transport_id>
+        <type>UDPv4</type>
+      </transport_descriptor>
+    </transport_descriptors>
+
+    <participant profile_name="jaka_udp_only" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>jaka_udp_transport</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

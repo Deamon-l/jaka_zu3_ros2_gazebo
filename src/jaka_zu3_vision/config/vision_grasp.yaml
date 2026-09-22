@@ -29,6 +29,16 @@ target_motion:
     approach_offset_z: 0.14
     grasp_offset_z: 0.0
     lift_offset_z: 0.16
+    # Fixed destination in world. Z is the placed cube's top surface.
+    place_x: 0.35
+    place_y: -0.15
+    place_z: 0.05
+    place_approach_offset_z: 0.14
+    # Keep the gripper base above the cube/ground at the fixed destination.
+    place_release_offset_z: 0.02
+    # 1: source -> destination; 2: destination -> original source as well.
+    transfer_cycles: 1
+    repeat_delay: 1.0
     # These joints move inward as the value increases.
     open_width: 0.0
     # 10 mm travel on each side closes the 70 mm opening onto a 50 mm cube.
@@ -37,8 +47,13 @@ target_motion:
     gripper_max_position: 0.025
     gripper_motion_time: 2.0
     grasp_settle_time: 0.5
-    finger_sync_tolerance: 0.003
-    finger_goal_tolerance: 0.005
+    # Never lift while one finger is late. Reopen/reclose once at grasp height.
+    gripper_sync_timeout: 2.0
+    gripper_close_attempts: 2
+    finger_sync_tolerance: 0.001
+    finger_goal_tolerance: 0.002
+    # Require fresh, separately measured positions from both fingers.
+    finger_state_timeout: 0.5
     use_sim_attachment: false
     attachment_timeout: 1.0
     attach_topic: /gripper/attach
